@@ -1,0 +1,76 @@
+# -----------------------------------------------------------------------------
+# EllipseLIO algorithm parameters for the Oxford Spires dataset (Hesai Pandar
+# QT64 LiDAR + Alphasense IMU, handheld/backpack platform). Ported verbatim
+# from upstream's own `config/qt64_spires.yaml` -- the authors' own Oxford
+# Spires tuning, which is exactly what we want to benchmark -- except for the
+# two deliberate changes noted below (lidar_min_range, and exposing a few
+# more knobs as env vars).
+# -----------------------------------------------------------------------------
+
+# T_imu_lidar: pose of the IMU frame wrt the LiDAR frame, MOLA convention
+# ("x y z yaw_deg pitch_deg roll_deg"). The Hesai LiDAR is already the
+# reference (base_link) frame in this dataset, so this is taken directly from
+# mola_lidar_odometry's / mola_fast_lio2_wrapper's own Oxford Spires pipeline
+# -- no inversion needed here (the module inverts it internally to build
+# EllipseLIO's r_imu_lidar/t_imu_lidar, see below).
+imu_pose_in_lidar: "0.018771 -0.008218 -0.070474 -90.6263 -0.1665 -0.1287"
+
+# Extrinsic cross-check (done before the first validation run, see the
+# plan's E10): upstream's own qt64_spires.yaml gives
+#   lidar.t_imu_lidar: [-0.0078, -0.0190, 0.0705]
+#   lidar.r_imu_lidar: [0.0002, -0.0018, 0.7110, 0.7032]   (quaternion, x y z w
+#                                                            -- confirmed from
+#                                                            QuaterniondFromArray()
+#                                                            in common_lib.h,
+#                                                            which reads
+#                                                            values[3] as w)
+# and both `t_imu_lidar`/`r_imu_lidar` are assigned directly to
+# `state.offset_T_L_I`/`offset_R_L_I` (see imu_processing.cpp's InitImu()),
+# the exact same "p_imu = R*p_lidar + T" convention fast_lio2_core's
+# extrinsic_R/T use. The quaternion above is a yaw of about +90.6 deg; the
+# `imu_pose_in_lidar` string above is a yaw of -90.6263 deg -- i.e. the
+# inverse rotation, as expected ("LiDAR wrt IMU" vs. "IMU wrt LiDAR").
+# Inverting `imu_pose_in_lidar`'s translation (0.018771, -0.008218,
+# -0.070474) by the +90.6 deg yaw gives approximately (-0.0080, -0.0189,
+# 0.0705), matching upstream's t_imu_lidar (-0.0078, -0.0190, 0.0705) to
+# within rounding. Confirmed consistent: the module computes r_imu_lidar/
+# t_imu_lidar from `imu_pose_in_lidar` above by inversion (see
+# EllipseLioOdometry.cpp), NOT from the dataset's `fixed_sensor_pose` /
+# sensor.yaml's T_base_lidar (a different convention -- see the common
+# plan's Oxford Spires section).
+
+lidar_sensor_label: "lidar"
+imu_sensor_label: "imu"
+
+# Fallback only: the Hesai Pandar PointCloud2 in this dataset carries a real
+# per-point "timestamp" field (confirmed against the raw bags, same as the
+# fastlio2 wrapper's own check), so this is unused in practice.
+fallback_scan_period: 0.1
+
+# mapping.*
+map_resolution: ${ELLIPSELIO_MAP_RESOLUTION|0.1}
+pub_map_n_secs: 10
+
+# lidar.*
+lidar_type: 4          # LidType::kHesai
+lidar_rate: 10
+lidar_scan_lines: ${ELLIPSELIO_SCAN_LINES|64}
+lidar_vertical_fov: 104.0
+lidar_max_range: ${ELLIPSELIO_MAX_RANGE|100.0}
+
+# Minimum range: discard returns closer than this. Upstream's own value is
+# 0.0; the Oxford Spires rig is handheld/backpack-mounted, so the carrier
+# generates a dense near-field cluster (~9% of every scan within 1 m) that
+# is rigidly attached to the sensor and therefore acts as a false
+# zero-motion constraint on scan-to-map registration -- the same issue the
+# fastlio2 wrapper's `blind: 1.0` addresses. Setting this to 1.0 m here
+# makes the two wrappers' near-field handling match, which is what keeps
+# the benchmark comparison fair.
+lidar_min_range: ${ELLIPSELIO_MIN_RANGE|1.0}
+
+# imu.* (upstream's own Alphasense IMU characterization for this dataset)
+imu_rate: 400
+imu_acc_noise: 0.0009432782069138238
+imu_gyr_noise: 0.00023031229571253504
+imu_acc_bias: 4.981034600256154e-05
+imu_gyr_bias: 4.46264879417123e-06

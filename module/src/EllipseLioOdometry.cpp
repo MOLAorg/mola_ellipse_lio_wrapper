@@ -32,9 +32,9 @@
 #include <mrpt/img/color_maps.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationPointCloud.h>
-#include <mrpt/opengl/CPointCloudColoured.h>
-#include <mrpt/opengl/CSetOfObjects.h>
-#include <mrpt/opengl/stock_objects.h>
+#include <mrpt/viz/CPointCloudColoured.h>
+#include <mrpt/viz/CSetOfObjects.h>
+#include <mrpt/viz/stock_objects.h>
 
 #include <sstream>
 
@@ -245,9 +245,9 @@ void EllipseLioOdometry::updateVisualization(
 
   // Vehicle pose corner:
   if (visualization_params_.current_pose_corner_size > 0) {
-    auto glVehicle = mrpt::opengl::CSetOfObjects::Create();
+    auto glVehicle = mrpt::viz::CSetOfObjects::Create();
     glVehicle->insert(
-      mrpt::opengl::stock_objects::CornerXYZ(visualization_params_.current_pose_corner_size));
+      mrpt::viz::stock_objects::CornerXYZ(visualization_params_.current_pose_corner_size));
     glVehicle->setPose(lidarPose);
     visualizer_->update_3d_object("ellipselio/vehicle", glVehicle);
   }
@@ -270,12 +270,12 @@ void EllipseLioOdometry::updateVisualization(
 void EllipseLioOdometry::updateVisualizationPath(const mrpt::poses::CPose3D & lidarPose)
 {
   if (!visualization_params_.show_trajectory) {
-    visualizer_->update_3d_object("ellipselio/path", mrpt::opengl::CSetOfObjects::Create());
+    visualizer_->update_3d_object("ellipselio/path", mrpt::viz::CSetOfObjects::Create());
     return;
   }
 
   if (!gl_estimated_path_) {
-    gl_estimated_path_ = mrpt::opengl::CSetOfLines::Create();
+    gl_estimated_path_ = mrpt::viz::CSetOfLines::Create();
     gl_estimated_path_->setColor_u8(0x20, 0x20, 0xe0, 0xff);
   }
 
@@ -289,15 +289,15 @@ void EllipseLioOdometry::updateVisualizationPath(const mrpt::poses::CPose3D & li
   // Hand a fresh copy to the GUI thread so this (worker-thread-owned) buffer
   // can keep growing on later ticks without racing with the GUI thread's
   // read of the previously-published object.
-  auto pathGrp = mrpt::opengl::CSetOfObjects::Create();
-  pathGrp->insert(mrpt::opengl::CSetOfLines::Create(*gl_estimated_path_));
+  auto pathGrp = mrpt::viz::CSetOfObjects::Create();
+  pathGrp->insert(mrpt::viz::CSetOfLines::Create(*gl_estimated_path_));
   visualizer_->update_3d_object("ellipselio/path", pathGrp);
 }
 
 void EllipseLioOdometry::updateVisualizationLocalMap()
 {
   if (!visualization_params_.show_localmap) {
-    visualizer_->update_3d_object("ellipselio/localmap", mrpt::opengl::CSetOfObjects::Create());
+    visualizer_->update_3d_object("ellipselio/localmap", mrpt::viz::CSetOfObjects::Create());
     return;
   }
 
@@ -309,14 +309,14 @@ void EllipseLioOdometry::updateVisualizationLocalMap()
 
   const auto pointsMap = toMrptPointsMap(*mapPts);
 
-  auto glCloud = mrpt::opengl::CPointCloudColoured::Create();
+  auto glCloud = mrpt::viz::CPointCloudColoured::Create();
   glCloud->loadFromPointsMap(pointsMap.get());
   glCloud->setPointSize(visualization_params_.local_map_point_size);
 
   const auto bbox = pointsMap->boundingBox();
   glCloud->recolorizeByCoordinate(bbox.min.z, bbox.max.z, 2 /*Z*/, mrpt::img::TColormap::cmJET);
 
-  auto grp = mrpt::opengl::CSetOfObjects::Create();
+  auto grp = mrpt::viz::CSetOfObjects::Create();
   grp->insert(glCloud);
   visualizer_->update_3d_object("ellipselio/localmap", grp);
 }

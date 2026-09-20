@@ -15,7 +15,7 @@
  *
  * Structurally mirrors mola_lidar_odometry's own
  * `mola-lidar-odometry-cli.cpp` (same dataset-source helpers, same
- * TCLAP flags where they overlap, same `while (isBusy()) sleep(1ms)`
+ * CLI11 flags where they overlap, same `while (isBusy()) sleep(1ms)`
  * no-drop idiom before advancing to the next dataset entry), minus the
  * companion state-estimator machinery: EllipseLIO is a self-contained
  * tightly-coupled LiDAR-inertial estimator and needs none.
@@ -32,7 +32,6 @@
 #include <mola_kernel/interfaces/OfflineDatasetSource.h>
 #include <mola_kernel/pretty_print_exception.h>
 #include <mola_yaml/yaml_helpers.h>
-#include <mrpt/3rdparty/tclap/CmdLine.h>
 #include <mrpt/core/Clock.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/obs/CObservationIMU.h>
@@ -42,6 +41,7 @@
 #include <mrpt/system/os.h>
 #include <mrpt/system/progress.h>
 
+#include <CLI/CLI.hpp>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -66,66 +66,105 @@ namespace
 
 struct Cli
 {
-  TCLAP::CmdLine cmd{"mola-ellipse-lio-cli"};
+  CLI::App cmd{"mola-ellipse-lio-cli"};
 
-  TCLAP::ValueArg<std::string> argYAML{
-    "c",  "config", "Input EllipseLIO pipeline YAML config file (required)",
-    true, "",       "ellipselio-mulran.yaml",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_verbosity_level{
-    "v",    "verbosity", "Verbosity level: ERROR|WARN|INFO|DEBUG {Default: INFO}", false, "",
-    "INFO", cmd};
-
-  TCLAP::ValueArg<std::string> arg_plugins{
-    "l",   "load-plugins", "One or more {comma separated} *.so files to load as plugins",
-    false, "foobar.so",    "foobar.so",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_outPath{
-    "",
-    "output-tum-path",
-    "Save the estimated path as a TXT file using the TUM file format (see evo docs)",
-    false,
-    "output-trajectory.txt",
-    "output-trajectory.txt",
-    cmd};
-
-  TCLAP::ValueArg<int> arg_firstN{
-    "",
-    "only-first-n",
-    "Run for the first N steps only (0=default, not used)",
-    false,
-    0,
-    "Number of dataset entries to run",
-    cmd};
+  std::string argYAML;
+  std::string arg_verbosity_level{"INFO"};
+  bool arg_verbosity_level_set{false};
+  std::string arg_plugins;
+  bool arg_plugins_set{false};
+  std::string arg_outPath{"output-trajectory.txt"};
+  bool arg_outPath_set{false};
+  int arg_firstN{0};
+  bool arg_firstN_set{false};
 
 #if defined(HAVE_MOLA_INPUT_MULRAN)
-  TCLAP::ValueArg<std::string> argMulranSeq{
-    "",    "input-mulran-seq", "INPUT DATASET: Use Mulran dataset sequence KAIST01|KAIST01|...",
-    false, "KAIST01",          "KAIST01",
-    cmd};
+  std::string argMulranSeq{"KAIST01"};
+  bool argMulranSeq_set{false};
 #endif
 
 #if defined(HAVE_MOLA_INPUT_RAWLOG)
-  TCLAP::ValueArg<std::string> argRawlog{
-    "",    "input-rawlog",   "INPUT DATASET: rawlog. Input dataset in rawlog format (*.rawlog)",
-    false, "dataset.rawlog", "dataset.rawlog",
-    cmd};
+  std::string argRawlog{"dataset.rawlog"};
+  bool argRawlog_set{false};
 #endif
 
 #if defined(HAVE_MOLA_INPUT_ROSBAG2)
-  TCLAP::ValueArg<std::string> argRosbag2{
-    "",    "input-rosbag2", "INPUT DATASET: rosbag2. Input dataset in rosbag2 format (*.mcap)",
-    false, "dataset.mcap",  "dataset.mcap",
-    cmd};
-  TCLAP::ValueArg<std::string> arg_lidarTopic{
-    "",    "lidar-topic", "Only for rosbag2 input: the LiDAR point cloud topic name.",
-    false, "/lidar",      "/lidar",
-    cmd};
-  TCLAP::ValueArg<std::string> arg_imuTopic{
-    "", "imu-topic", "Only for rosbag2 input: the IMU topic name.", false, "/imu", "/imu", cmd};
+  std::string argRosbag2{"dataset.mcap"};
+  bool argRosbag2_set{false};
+  std::string arg_lidarTopic{"/lidar"};
+  std::string arg_imuTopic{"/imu"};
 #endif
+
+  CLI::Option * optVerbosity{nullptr};
+  CLI::Option * optPlugins{nullptr};
+  CLI::Option * optOutPath{nullptr};
+  CLI::Option * optFirstN{nullptr};
+#if defined(HAVE_MOLA_INPUT_MULRAN)
+  CLI::Option * optMulranSeq{nullptr};
+#endif
+#if defined(HAVE_MOLA_INPUT_RAWLOG)
+  CLI::Option * optRawlog{nullptr};
+#endif
+#if defined(HAVE_MOLA_INPUT_ROSBAG2)
+  CLI::Option * optRosbag2{nullptr};
+#endif
+
+  Cli()
+  {
+    cmd.add_option("-c,--config", argYAML, "Input EllipseLIO pipeline YAML config file (required)")
+      ->required();
+    optVerbosity = cmd.add_option(
+      "-v,--verbosity", arg_verbosity_level,
+      "Verbosity level: ERROR|WARN|INFO|DEBUG {Default: INFO}");
+    optPlugins = cmd.add_option(
+      "-l,--load-plugins", arg_plugins,
+      "One or more {comma separated} *.so files to load as plugins");
+    optOutPath = cmd.add_option(
+      "--output-tum-path", arg_outPath,
+      "Save the estimated path as a TXT file using the TUM file format (see evo docs)");
+    optFirstN = cmd.add_option(
+      "--only-first-n", arg_firstN, "Run for the first N steps only (0=default, not used)");
+
+#if defined(HAVE_MOLA_INPUT_MULRAN)
+    optMulranSeq = cmd.add_option(
+      "--input-mulran-seq", argMulranSeq,
+      "INPUT DATASET: Use Mulran dataset sequence KAIST01|KAIST01|...");
+#endif
+
+#if defined(HAVE_MOLA_INPUT_RAWLOG)
+    optRawlog = cmd.add_option(
+      "--input-rawlog", argRawlog,
+      "INPUT DATASET: rawlog. Input dataset in rawlog format (*.rawlog)");
+#endif
+
+#if defined(HAVE_MOLA_INPUT_ROSBAG2)
+    optRosbag2 = cmd.add_option(
+      "--input-rosbag2", argRosbag2,
+      "INPUT DATASET: rosbag2. Input dataset in rosbag2 format (*.mcap)");
+    cmd.add_option(
+      "--lidar-topic", arg_lidarTopic, "Only for rosbag2 input: the LiDAR point cloud topic name.");
+    cmd.add_option("--imu-topic", arg_imuTopic, "Only for rosbag2 input: the IMU topic name.");
+#endif
+  }
+
+  // Called from main() right after CLI11_PARSE, to fill in the *_set flags
+  // (mirrors what TCLAP's own isSet() gave us for free).
+  void afterParse()
+  {
+    arg_verbosity_level_set = (optVerbosity->count() > 0);
+    arg_plugins_set = (optPlugins->count() > 0);
+    arg_outPath_set = (optOutPath->count() > 0);
+    arg_firstN_set = (optFirstN->count() > 0);
+#if defined(HAVE_MOLA_INPUT_MULRAN)
+    argMulranSeq_set = (optMulranSeq->count() > 0);
+#endif
+#if defined(HAVE_MOLA_INPUT_RAWLOG)
+    argRawlog_set = (optRawlog->count() > 0);
+#endif
+#if defined(HAVE_MOLA_INPUT_ROSBAG2)
+    argRosbag2_set = (optRosbag2->count() > 0);
+#endif
+  }
 };  // end struct "Cli"
 
 #if defined(HAVE_MOLA_INPUT_MULRAN)
@@ -188,14 +227,10 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag2(
     std::vector<std::string> parts;
     mrpt::system::tokenize(rosbag2file, ",", parts);
     ASSERT_(!parts.empty());
-    if (parts.size() == 1)
-    {
+    if (parts.size() == 1) {
       bagsYaml = "'" + mrpt::system::trim(parts[0]) + "'";
-    }
-    else
-    {
-      for (const auto & p : parts)
-      {
+    } else {
+      for (const auto & p : parts) {
         bagsYaml += "\n        - '" + mrpt::system::trim(p) + "'";
       }
     }
@@ -221,8 +256,7 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag2(
           fixed_sensor_pose: "${IMU_POSE_X|0} ${IMU_POSE_Y|0} ${IMU_POSE_Z|0} ${IMU_POSE_YAW|0} ${IMU_POSE_PITCH|0} ${IMU_POSE_ROLL|0}"
           use_fixed_sensor_pose: ${MOLA_USE_FIXED_IMU_POSE|false}
 )"""",
-    bagsYaml.c_str(), cli.arg_lidarTopic.getValue().c_str(),
-    cli.arg_imuTopic.getValue().c_str())));
+    bagsYaml.c_str(), cli.arg_lidarTopic.c_str(), cli.arg_imuTopic.c_str())));
 
   o->initialize(cfg);
   return o;
@@ -251,32 +285,32 @@ int main_odometry(Cli & cli)
   auto ellipselio = mola::EllipseLioOdometry::Create();
 
   mrpt::system::VerbosityLevel logLevel = ellipselio->getMinLoggingLevel();
-  if (cli.arg_verbosity_level.isSet()) {
+  if (cli.arg_verbosity_level_set) {
     using vl = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>;
-    logLevel = vl::name2value(cli.arg_verbosity_level.getValue());
+    logLevel = vl::name2value(cli.arg_verbosity_level);
     ellipselio->setVerbosityLevel(logLevel);
   }
 
   // Initialize EllipseLIO (no 'raw_data_source': we feed it directly below):
-  const auto cfg = mola::load_yaml_file(cli.argYAML.getValue());
+  const auto cfg = mola::load_yaml_file(cli.argYAML);
   ellipselio->initialize(cfg);
 
   // Select dataset input:
   std::shared_ptr<mola::OfflineDatasetSource> dataset;
 
 #if defined(HAVE_MOLA_INPUT_RAWLOG)
-  if (cli.argRawlog.isSet()) {
-    dataset = dataset_from_rawlog(cli.argRawlog.getValue(), logLevel);
+  if (cli.argRawlog_set) {
+    dataset = dataset_from_rawlog(cli.argRawlog, logLevel);
   } else
 #endif
 #if defined(HAVE_MOLA_INPUT_MULRAN)
-    if (cli.argMulranSeq.isSet()) {
-    dataset = dataset_from_mulran(cli.argMulranSeq.getValue(), logLevel);
+    if (cli.argMulranSeq_set) {
+    dataset = dataset_from_mulran(cli.argMulranSeq, logLevel);
   } else
 #endif
 #if defined(HAVE_MOLA_INPUT_ROSBAG2)
-    if (cli.argRosbag2.isSet()) {
-    dataset = dataset_from_rosbag2(cli, cli.argRosbag2.getValue(), logLevel);
+    if (cli.argRosbag2_set) {
+    dataset = dataset_from_rosbag2(cli, cli.argRosbag2, logLevel);
   } else
 #endif
   {
@@ -285,11 +319,11 @@ int main_odometry(Cli & cli)
   ASSERT_(dataset);
 
   // Save GT, if available:
-  if (cli.arg_outPath.isSet() && dataset->hasGroundTruthTrajectory()) {
+  if (cli.arg_outPath_set && dataset->hasGroundTruthTrajectory()) {
     using namespace std::string_literals;
     const auto gtPath = dataset->getGroundTruthTrajectory();
-    const auto gtOutFile = mrpt::system::fileNameChangeExtension(cli.arg_outPath.getValue(), "") +
-                           "_gt."s + mrpt::system::extractFileExtension(cli.arg_outPath.getValue());
+    const auto gtOutFile = mrpt::system::fileNameChangeExtension(cli.arg_outPath, "") + "_gt."s +
+                           mrpt::system::extractFileExtension(cli.arg_outPath);
     std::cout << "Ground truth available. Saving it to: " << gtOutFile << "\n";
     gtPath.saveToTextFile_TUM(gtOutFile);
   }
@@ -297,8 +331,8 @@ int main_odometry(Cli & cli)
   const double tStart = mrpt::Clock::nowDouble();
 
   size_t lastDatasetEntry = dataset->datasetSize();
-  if (cli.arg_firstN.isSet()) {
-    lastDatasetEntry = static_cast<size_t>(cli.arg_firstN.getValue());
+  if (cli.arg_firstN_set) {
+    lastDatasetEntry = static_cast<size_t>(cli.arg_firstN);
   }
   mrpt::keep_min(lastDatasetEntry, dataset->datasetSize());
 
@@ -346,8 +380,8 @@ int main_odometry(Cli & cli)
   std::cout << "\nDone. Dataset entries processed: " << lastDatasetEntry
             << ", LiDAR scans fed: " << nLidarFed << "\n";
 
-  if (cli.arg_outPath.isSet()) {
-    const auto fil = cli.arg_outPath.getValue();
+  if (cli.arg_outPath_set) {
+    const auto fil = cli.arg_outPath;
     std::cout << "Saving estimated path in TUM format to: " << fil << "\n";
     ellipselio->estimatedTrajectory().saveToTextFile_TUM(fil);
   }
@@ -361,11 +395,12 @@ int main(int argc, char ** argv)
 {
   try {
     Cli cli;
-    if (!cli.cmd.parse(argc, argv)) return 1;
+    CLI11_PARSE(cli.cmd, argc, argv);
+    cli.afterParse();
 
-    if (cli.arg_plugins.isSet()) {
+    if (cli.arg_plugins_set) {
       std::string errMsg;
-      const auto plugins = cli.arg_plugins.getValue();
+      const auto plugins = cli.arg_plugins;
       std::cout << "Loading plugin(s): " << plugins << "\n";
       if (!mrpt::system::loadPluginModules(plugins, errMsg)) {
         std::cerr << errMsg << std::endl;

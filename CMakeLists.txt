@@ -22,9 +22,9 @@ find_package(mola_common REQUIRED)
 # find dependencies:
 find_package(Eigen3 REQUIRED)
 find_package(PCL 1.8 REQUIRED COMPONENTS common filters)
-find_package(mrpt-maps REQUIRED)
-find_package(mrpt-obs REQUIRED)
-find_package(mrpt-tclap REQUIRED)
+find_package(mrpt_maps REQUIRED)
+find_package(mrpt_obs REQUIRED)
+find_package(CLI11 REQUIRED)
 find_package(mola_kernel REQUIRED)
 find_package(mola_yaml REQUIRED)
 
@@ -56,8 +56,8 @@ mola_add_library(
     # Last:
     module/src/register.cpp
   PUBLIC_LINK_LIBRARIES
-    mrpt::maps
-    mrpt::obs
+    mrpt::mrpt_maps
+    mrpt::mrpt_obs
     mola::mola_kernel
     mola::mola_yaml
   PRIVATE_LINK_LIBRARIES
@@ -70,7 +70,7 @@ mola_add_library(
     ellipse_lio_core
   CMAKE_DEPENDENCIES
     mola_kernel
-    mrpt-maps
+    mrpt_maps
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -130,8 +130,8 @@ mola_add_executable(
     # PCL_NO_PRECOMPILE define along with it (see
     # third_party/ellipse_lio_core/CMakeLists.txt).
     ellipse_lio_core
-    mrpt::maps
-    mrpt::tclap
+    mrpt::mrpt_maps
+    CLI11::CLI11
 )
 
 if(mola_input_mulran_dataset_FOUND)

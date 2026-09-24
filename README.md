@@ -31,6 +31,15 @@ support), so the same core logic backs both the live module and the offline CLI.
   same approach as `mola_lidar_odometry`'s and `mola_fast_lio2_wrapper`'s own Oxford
   Spires launch files.
 - MulRan is not wired up for this wrapper (out of scope, see the implementation plan).
+- **LiDAR-only rawlogs** (e.g. MVSim synthetic datasets): `--input-rawlog`
+  plus `--synthetic-imu`, which interleaves a constant-gravity, zero-rate IMU
+  sample before each scan (the same decorator the other LIO wrappers use).
+  See `pipelines/ellipselio-mvsim.yaml`:
+
+  ```bash
+  mola-ellipse-lio-cli -c pipelines/ellipselio-mvsim.yaml --synthetic-imu \
+    --input-rawlog dataset.rawlog --output-tum-path out.tum
+  ```
 
 ## Build
 

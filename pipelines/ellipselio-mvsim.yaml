@@ -1,0 +1,44 @@
+# -----------------------------------------------------------------------------
+# EllipseLIO algorithm parameters for MVSim-generated synthetic LiDAR datasets
+# (e.g. mvsim-dataset-gen output of mvsim_tutorial/
+# demo_lidar_odometry_benchmark.world.xml: Ouster OS1-32 at 10 Hz, 22.5 deg
+# vertical FOV, 60 m max range).
+#
+# Such rawlogs carry no IMU, so run the offline CLI with --synthetic-imu: it
+# interleaves a constant-gravity, zero-angular-rate IMU reading before each
+# scan, and the motion estimate comes entirely from LiDAR registration. The
+# IMU noise below is deliberately loose (same order as the other wrappers'
+# KITTI configs), so that registration, not the synthetic IMU, dominates. The
+# per-point time field is all zeros (instantaneous, undistorted scans), so no
+# deskew takes place.
+#
+# The output trajectory is the LiDAR pose (see EllipseLioOdometry.cpp), to be
+# compared against the dataset's LiDAR-frame ground truth.
+# -----------------------------------------------------------------------------
+
+# The synthetic IMU carries no mounting information: identity extrinsic.
+imu_pose_in_lidar: "0 0 0 0 0 0"
+
+lidar_sensor_label: "${MOLA_LIDAR_NAME|lidar1}"
+imu_sensor_label: "imu"
+
+fallback_scan_period: 0.1
+
+# mapping.*
+map_resolution: ${ELLIPSELIO_MAP_RESOLUTION|0.1}
+pub_map_n_secs: 10
+
+# lidar.*
+lidar_type: 3          # LidType::kOuster
+lidar_rate: 10
+lidar_scan_lines: ${ELLIPSELIO_SCAN_LINES|32}
+lidar_vertical_fov: 22.5
+lidar_max_range: ${ELLIPSELIO_MAX_RANGE|60.0}
+lidar_min_range: ${ELLIPSELIO_MIN_RANGE|0.5}
+
+# imu.*
+imu_rate: 10
+imu_acc_noise: ${ELLIPSELIO_ACC_NOISE|0.1}
+imu_gyr_noise: ${ELLIPSELIO_GYR_NOISE|0.1}
+imu_acc_bias: 0.0001
+imu_gyr_bias: 0.0001

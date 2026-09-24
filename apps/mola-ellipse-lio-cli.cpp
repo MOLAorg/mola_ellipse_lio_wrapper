@@ -95,6 +95,8 @@ struct Cli
   std::string arg_imuTopic{"/imu"};
 #endif
 
+  bool arg_syntheticImu{false};
+
   CLI::Option * optVerbosity{nullptr};
   CLI::Option * optPlugins{nullptr};
   CLI::Option * optOutPath{nullptr};
@@ -145,6 +147,11 @@ struct Cli
       "--lidar-topic", arg_lidarTopic, "Only for rosbag2 input: the LiDAR point cloud topic name.");
     cmd.add_option("--imu-topic", arg_imuTopic, "Only for rosbag2 input: the IMU topic name.");
 #endif
+
+    cmd.add_flag(
+      "--synthetic-imu", arg_syntheticImu,
+      "Interleave a synthetic, stationary IMU reading before each LiDAR scan, for LiDAR-only "
+      "datasets");
   }
 
   // Called from main() right after CLI11_PARSE, to fill in the *_set flags
@@ -263,6 +270,78 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag2(
 }
 #endif
 
+// Some datasets carry no IMU stream at all (e.g. LiDAR-only synthetic
+// rawlogs), while EllipseLIO is IMU-mandatory (its IMU stream is the deskew
+// and propagation clock, see EllipseLioOdometry::onImuObservation()). This
+// wraps the real dataset and interleaves one synthetic, constant-gravity,
+// zero-angular-rate CObservationIMU immediately before each real LiDAR scan,
+// so the actual motion estimate comes entirely from LiDAR registration. Same
+// technique, rationale and constant as mola-dlio-cli's WithSyntheticImu, so
+// that IMU-less datasets are fed identically to all wrappers.
+//
+// Doubling datasetSize() (one synthetic-IMU timestep before each real
+// timestep) rather than merging both into one CSensoryFrame per timestep is
+// deliberate: main_odometry()'s loop below only ever takes ONE observation
+// per timestep (pointcloud, else IMU), so a merged frame would silently drop
+// whichever one it didn't pick. Real timesteps without a LiDAR scan get an
+// empty synthetic slot.
+class WithSyntheticImu : public mola::OfflineDatasetSource
+{
+public:
+  explicit WithSyntheticImu(std::shared_ptr<mola::OfflineDatasetSource> inner)
+  : inner_(std::move(inner))
+  {
+  }
+
+  size_t datasetSize() const override { return 2 * inner_->datasetSize(); }
+
+  mrpt::obs::CSensoryFrame::Ptr datasetGetObservations(size_t timestep) const override
+  {
+    const size_t realIdx = timestep / 2;
+    if (timestep % 2 == 1) {
+      return inner_->datasetGetObservations(realIdx);
+    }
+
+    auto sf = mrpt::obs::CSensoryFrame::Create();
+
+    // Synthetic IMU tick, timestamped just before the scan it precedes.
+    const auto realSf = inner_->datasetGetObservations(realIdx);
+    const auto lidarObs = realSf->getObservationByClass<mrpt::obs::CObservationPointCloud>();
+    if (!lidarObs) {
+      return sf;
+    }
+
+    // Clamped at 0: TTimeStamp has no epoch offset, so a timestamp before
+    // fromDouble(0.0) would underflow into garbage.
+    const double lidarT = mrpt::Clock::toDouble(lidarObs->timestamp);
+    auto imu = mrpt::obs::CObservationIMU::Create();
+    imu->sensorLabel = "imu";
+    imu->timestamp = mrpt::Clock::fromDouble(std::max(0.0, lidarT - 0.001));
+    imu->set(mrpt::obs::IMU_X_ACC, 0.0);
+    imu->set(mrpt::obs::IMU_Y_ACC, 0.0);
+    imu->set(mrpt::obs::IMU_Z_ACC, kGravity);
+    imu->set(mrpt::obs::IMU_WX, 0.0);
+    imu->set(mrpt::obs::IMU_WY, 0.0);
+    imu->set(mrpt::obs::IMU_WZ, 0.0);
+
+    sf->insert(imu);
+    return sf;
+  }
+
+  bool hasGroundTruthTrajectory() const override { return inner_->hasGroundTruthTrajectory(); }
+  mola::trajectory_t getGroundTruthTrajectory() const override
+  {
+    return inner_->getGroundTruthTrajectory();
+  }
+
+private:
+  // Standard gravity magnitude (m/s^2), as read by a stationary, level
+  // accelerometer on its up axis.
+  static constexpr double kGravity = 9.80665;
+
+  std::shared_ptr<mola::OfflineDatasetSource> inner_;
+};
+
 void mola_signal_handler(int s)
 {
   std::cerr << "Caught signal " << s << ". Shutting down...\n";
@@ -317,6 +396,10 @@ int main_odometry(Cli & cli)
     THROW_EXCEPTION("At least one of the dataset input CLI flags must be defined. Use --help.");
   }
   ASSERT_(dataset);
+
+  if (cli.arg_syntheticImu) {
+    dataset = std::make_shared<WithSyntheticImu>(dataset);
+  }
 
   // Save GT, if available:
   if (cli.arg_outPath_set && dataset->hasGroundTruthTrajectory()) {

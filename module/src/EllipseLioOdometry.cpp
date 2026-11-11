@@ -80,11 +80,13 @@ void EllipseLioOdometry::initialize_frontend(const Yaml & cfg)
   lidar_sensor_label_regex_ = std::regex(lidar_sensor_label);
   imu_sensor_label_regex_ = std::regex(imu_sensor_label);
 
-  std::string imu_pose_in_lidar_str = "0 0 0 0 0 0";
-  YAML_LOAD_OPT(imu_pose_in_lidar_str, std::string);
-  imu_pose_in_lidar_ = parsePose6D(imu_pose_in_lidar_str);
+  // The YAML key is the variable name: "imu_pose_in_lidar", as in the shipped
+  // pipelines and the other LIO wrappers.
+  std::string imu_pose_in_lidar = "0 0 0 0 0 0";
+  YAML_LOAD_OPT(imu_pose_in_lidar, std::string);
+  imu_pose_in_lidar_ = parsePose6D(imu_pose_in_lidar);
 
-  YAML_LOAD_OPT(fallback_scan_period_, double);
+  YAML_LOAD_MEMBER_OPT(fallback_scan_period, double);
 
   YAML_LOAD_OPT3(core_cfg_, map_resolution, double);
   YAML_LOAD_OPT3(core_cfg_, pub_map_n_secs, int);

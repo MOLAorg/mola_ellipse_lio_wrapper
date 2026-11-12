@@ -86,6 +86,17 @@ void EllipseLioOdometry::initialize_frontend(const Yaml & cfg)
   YAML_LOAD_OPT(imu_pose_in_lidar, std::string);
   imu_pose_in_lidar_ = parsePose6D(imu_pose_in_lidar);
 
+  // Pose of the LiDAR frame wrt base_link (T_base_lidar): same key name and
+  // convention as the DLIO, Fast-LIO2 and GLIM wrappers'.
+  std::string baselink2lidar_pose_str = "0 0 0 0 0 0";
+  YAML_LOAD_OPT(baselink2lidar_pose_str, std::string);
+  baselink_pose_of_lidar_ = parsePose6D(baselink2lidar_pose_str);
+
+  imu_to_output_frame_ = worldFromBaseLink(
+    mrpt::poses::CPose3D::Identity(), imu_pose_in_lidar_, baselink_pose_of_lidar_);
+  output_frame_id_ =
+    baselink_pose_of_lidar_ == mrpt::poses::CPose3D::Identity() ? "lidar" : "base_link";
+
   YAML_LOAD_MEMBER_OPT(fallback_scan_period, double);
 
   YAML_LOAD_OPT3(core_cfg_, map_resolution, double);
@@ -187,42 +198,53 @@ void EllipseLioOdometry::onLidarObservation(const mrpt::obs::CObservation::Const
 
 void EllipseLioOdometry::processLidarScan(mrpt::obs::CObservation::ConstPtr o)
 {
-  MRPT_TRY_START
+  // On the worker thread an exception would be lost in the discarded future:
+  // report it, and always release the in-flight count, or isBusy() would
+  // stay true forever.
+  try {
+    processLidarScanImpl(o);
+  } catch (const std::exception & e) {
+    MRPT_LOG_ERROR_STREAM("Error processing a LiDAR scan: " << e.what());
+  } catch (...) {
+    MRPT_LOG_ERROR("Unknown error processing a LiDAR scan");
+  }
+  tasks_in_flight_--;
+}
+
+void EllipseLioOdometry::processLidarScanImpl(const mrpt::obs::CObservation::ConstPtr & o)
+{
   auto pc = std::dynamic_pointer_cast<const mrpt::obs::CObservationPointCloud>(o);
   if (pc && core_) {
     double t_beg, t_end;
     auto cloud = toEllipseLioCloud(*pc, fallback_scan_period_, t_beg, t_end);
     core_->addLidarScan(cloud, t_beg, t_end);
-    for (const auto & out : core_->drainReady()) publishOutput(out);
+    for (const auto & out : core_->drainReady()) {
+      publishOutput(out);
+    }
   }
-  tasks_in_flight_--;
-  MRPT_TRY_END
 }
 
 void EllipseLioOdometry::publishOutput(const ellipse_lio_core::OdometryOutput & out)
 {
-  // EllipseLIO estimates the IMU pose; report the LiDAR pose instead, since
-  // that's the convention `base_link` uses in the rest of MOLA (see e.g.
-  // the Oxford Spires / MulRan launch YAMLs, where the LiDAR is the
-  // reference frame and every other sensor's `fixed_sensor_pose` is given
-  // wrt it).
+  // EllipseLIO estimates the IMU pose; report base_link (or the LiDAR, when
+  // it is the reference frame) as the other MOLA modules do.
   const mrpt::poses::CPose3D imuPose = isometryToPose(out.pose_imu);
-  const mrpt::poses::CPose3D lidarPose = imuPose + imu_pose_in_lidar_;
+  const mrpt::poses::CPose3D outputPose = imuPose + imu_to_output_frame_;
 
   const auto timestamp = mrpt::Clock::fromDouble(out.timestamp);
 
   {
     auto lck = mrpt::lockHelper(trajectory_mtx_);
-    trajectory_.insert(timestamp, lidarPose);
+    trajectory_.insert(timestamp, outputPose);
   }
 
   if (anyUpdateLocalizationSubscriber()) {
     LocalizationUpdate lu;
     lu.timestamp = timestamp;
     lu.reference_frame = "map";
-    lu.child_frame = "lidar";
+    lu.child_frame = output_frame_id_;
     lu.method = "ellipse_lio";
-    lu.pose = lidarPose.asTPose();
+    lu.pose = outputPose.asTPose();
     advertiseUpdatedLocalization(lu);
   }
 
@@ -237,7 +259,18 @@ void EllipseLioOdometry::publishOutput(const ellipse_lio_core::OdometryOutput & 
     advertiseUpdatedMap(mu);
   }
 
-  updateVisualization(lidarPose, out);
+  updateVisualization(outputPose, out);
+}
+
+mrpt::poses::CPose3D EllipseLioOdometry::worldFromBaseLink(
+  const mrpt::poses::CPose3D & worldFromImu, const mrpt::poses::CPose3D & imuPoseInLidar,
+  const mrpt::poses::CPose3D & lidarPoseInBaseLink)
+{
+  mrpt::poses::CPose3D lidarPoseInImu = imuPoseInLidar;
+  lidarPoseInImu.inverse();
+  mrpt::poses::CPose3D baseLinkPoseInLidar = lidarPoseInBaseLink;
+  baseLinkPoseInLidar.inverse();
+  return worldFromImu + lidarPoseInImu + baseLinkPoseInLidar;
 }
 
 void EllipseLioOdometry::updateVisualization(

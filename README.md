@@ -83,7 +83,10 @@ extrinsic-convention cross-check.
 
 Mirrors upstream's `mapping.*`/`lidar.*`/`imu.*` YAML schema (dots replaced by
 underscores), plus the module-level `imu_pose_in_lidar` (MOLA `x y z yaw_deg pitch_deg
-roll_deg` convention) and `lidar_sensor_label`/`imu_sensor_label` regexes. See
+roll_deg` convention), `baselink2lidar_pose_str` (pose of the LiDAR wrt `base_link`, same
+key and convention as the DLIO, Fast-LIO2 and GLIM wrappers) and
+`lidar_sensor_label`/`imu_sensor_label` regexes. The reported pose is `base_link`'s, or
+the LiDAR's when `baselink2lidar_pose_str` is left at identity. See
 `third_party/ellipse_lio_core/include/ellipse_lio_core/Types.hpp`'s `Config` struct for
 the authoritative field list.
 
@@ -117,6 +120,11 @@ cross-checked numerically, an adaptive-weighting ablation test performed, both O
 Spires validation sequences tried, upstream's own `min_range: 0.0` vs. our `1.0`
 default tried). No root cause was conclusively identified within this session; this is
 recorded as a known-broken item, not silently worked around.
+
+Note that until the IMU extrinsic was read from the documented
+`imu_pose_in_lidar` key, the module silently used an identity extrinsic, while
+this dataset's IMU is rotated by about -90 deg in yaw wrt the LiDAR. Both
+sequences remain to be re-checked with that fix.
 
 ## Notes
 

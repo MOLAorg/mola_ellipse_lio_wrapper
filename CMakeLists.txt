@@ -114,6 +114,15 @@ install(
 )
 
 # -----------------------------------------------------------------------------
+#  Tests for the wrapper module itself (ellipse_lio_core has its own): the
+#  frame conventions, pure pose algebra whose errors are invisible in APE.
+# -----------------------------------------------------------------------------
+if(DETECTED_ROS2 AND BUILD_TESTING AND ament_cmake_gtest_FOUND)
+  ament_add_gtest(test_frame_conventions module/test/test_frame_conventions.cpp)
+  target_link_libraries(test_frame_conventions ${PROJECT_NAME} ellipse_lio_core)
+endif()
+
+# -----------------------------------------------------------------------------
 #  mola-ellipse-lio-cli: the offline, lossless CLI app
 # -----------------------------------------------------------------------------
 find_package(mola_input_mulran_dataset) # optional

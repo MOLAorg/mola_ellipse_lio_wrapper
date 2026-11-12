@@ -89,6 +89,18 @@ public:
    * updates (`map` -> `lidar`, i.e. deskewed-scan-frame poses). */
   mrpt::poses::CPose3DInterpolator estimatedTrajectory() const;
 
+  /** The pose this module reports, from the IMU pose EllipseLIO estimates:
+   *
+   *   T_w_base = T_w_imu . T_lidar_imu^-1 . T_base_lidar^-1
+   *
+   * @param worldFromImu        what EllipseLIO estimates, `T_w_imu`.
+   * @param imuPoseInLidar      `T_lidar_imu`, YAML `imu_pose_in_lidar`.
+   * @param lidarPoseInBaseLink `T_base_lidar`, YAML `baselink2lidar_pose_str`.
+   */
+  static mrpt::poses::CPose3D worldFromBaseLink(
+    const mrpt::poses::CPose3D & worldFromImu, const mrpt::poses::CPose3D & imuPoseInLidar,
+    const mrpt::poses::CPose3D & lidarPoseInBaseLink);
+
 protected:
   void initialize_frontend(const Yaml & cfg) override;
 
@@ -96,6 +108,7 @@ private:
   void onLidarObservation(const mrpt::obs::CObservation::ConstPtr & o);
   void onImuObservation(const mrpt::obs::CObservation::ConstPtr & o);
   void processLidarScan(mrpt::obs::CObservation::ConstPtr o);
+  void processLidarScanImpl(const mrpt::obs::CObservation::ConstPtr & o);
   void publishOutput(const ellipse_lio_core::OdometryOutput & out);
 
   // --- GUI / 3D scene visualization (mola_viz / mola_viz_imgui) ---
@@ -113,6 +126,16 @@ private:
   /// `fixed_sensor_pose` entries dataset YAMLs already use for the IMU
   /// sensor when the LiDAR is the reference/base_link frame).
   mrpt::poses::CPose3D imu_pose_in_lidar_;
+
+  /// Pose of the LiDAR frame wrt `base_link`, i.e. `T_base_lidar`. Identity
+  /// when the LiDAR itself is the reference frame.
+  mrpt::poses::CPose3D baselink_pose_of_lidar_;
+
+  /// Constant pose of the output frame wrt the IMU, see worldFromBaseLink().
+  mrpt::poses::CPose3D imu_to_output_frame_;
+
+  /// Name of the frame the reported pose lands in.
+  std::string output_frame_id_ = "lidar";
 
   /// Used only as a fallback when an incoming point cloud has no per-point
   /// timestamp channel (synthesizes one from azimuth angle, assuming a

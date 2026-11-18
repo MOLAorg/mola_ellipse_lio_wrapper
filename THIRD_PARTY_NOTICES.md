@@ -9,7 +9,7 @@ except where explicitly noted.
 ## EllipseLIO
 
 - Upstream: https://github.com/v4rl-ucy/ellipselio
-- Commit pinned: `bbc2a0a29a0fbe703c379ace7ea9a6dc14008c1c` (2026-06-12)
+- Commit pinned: `15655fe888f928c0337959c3afb7d29504df65ac` (2026-10-09)
 - License: **MIT**.
 - Copyright (c) 2026 Rowan Border and Margarita Chli.
 - Paper: Border & Chli, *EllipseLIO: Adaptive LiDAR Inertial Odometry with an Ellipsoid
@@ -20,9 +20,10 @@ except where explicitly noted.
     fields replaced by `double` seconds; ROS-parameter-array conversion helpers
     (`Vec3dFromArray`/`QuaterniondFromArray`/`Mat3dFromArray`) dropped (this port
     receives already-parsed Eigen types); the vendor-specific PCL point types
-    (`LivoxPoint`, `VelodynePoint`, `OusterPoint`, `HesaiPoint`, `GazeboPoint`) and the
-    `pcl_conversions` include were removed, since this port never parses a raw
-    `sensor_msgs::PointCloud2` -- see `ImuProcess.h`/`LidarProcess.h` below.
+    (`LivoxPoint`, `VelodynePoint`, `OusterPoint`, `HesaiPoint`, `GazeboPoint`,
+    `IsaacSimPoint`) and the `pcl_conversions` include were removed, since this port
+    never parses a raw `sensor_msgs::PointCloud2` -- see `ImuProcess.h`/`LidarProcess.h`
+    below.
     `PointXYZNRGBIT` (the internal working point type) is otherwise unchanged.
   - `third_party/ellipse_lio_core/include/ellipse_lio_core/ImuProcess.h` and
     `src/ImuProcess.cpp` (ported from `include/imu_processing.h` /
@@ -41,9 +42,9 @@ except where explicitly noted.
     `src/lidar_processing.cpp`): the ROS `PointCloud2` subscription and the
     vendor-specific point-decoding templates (`PointCloudHandler<T>`,
     `ConvertPoint<T>`, the per-vendor `SetPoint()` overloads for Livox, Velodyne,
-    Ouster and Gazebo) removed -- this port receives points already decoded into
-    `LidarPointVector` (see `Types.hpp` and the MOLA module's adapters), so there is
-    no raw `PointCloud2` to parse. The Hesai decoding path is preserved in spirit:
+    Ouster and the two simulators) removed -- this port receives points already
+    decoded into `LidarPointVector` (see `Types.hpp` and the MOLA module's adapters),
+    so there is no raw `PointCloud2` to parse. The Hesai decoding path is preserved in spirit:
     upstream's `SetPoint(HesaiPoint, ...)` used the point's own absolute timestamp
     field, ignoring the message-header-based time entirely, which is exactly what
     `feedScan()`'s `t_beg + t_offset_sec` reconstructs. **The range-binning and
@@ -58,12 +59,22 @@ except where explicitly noted.
     iterated-EKF tensor-voting update, `MapIncremental()`); the five ROS publishers
     and the `tf2_ros` broadcaster are replaced by the returned `OdometryOutput` and
     the `currentMap()` accessor. `SplitMap()` (PointCloud2 message chunking, needed
-    only for ROS message size limits) and the whole camera pipeline are dropped.
+    only for ROS message size limits) and the whole camera pipeline are dropped, and
+    so are upstream's `publish.*` keys (`map`, `scan`, `markers`, `odometry`,
+    `analytics`, `tf`): they only switch ROS publishers and their timers on or off.
+    The analytics payload is always filled in, as upstream does with its default
+    `publish.analytics: true`; nothing in it feeds back into the estimate. The
+    per-primitive map colors (`r`/`g`/`b`, set in `ComputeTensorEigen()`) are not
+    written either, since nothing here reads them.
     `imu_process_`/`lid_process_` are built directly in the constructor instead of
     lazily on the first timer tick (upstream deferred this only because it needed
     `shared_from_this()`, unavailable inside an `rclcpp::Node` constructor -- not
     needed here). Also dropped as dead code (declared, assigned, never read anywhere
-    in upstream): `n_res_`, `map_search_rad_`, `vel_pose_counter_`, `ekfom_upd_cnt_`.
+    in upstream): `n_res_`, `map_search_rad_`, `vel_pose_counter_`, `ekfom_upd_cnt_`,
+    and the per-bin scan centroids of the registration (`ctr_mean_bins_`,
+    `centroid_mean`). The registration looks up the position 100 entries back in
+    `vel_poses_` with a signed index, clamped at 0; upstream subtracts 100 from the
+    unsigned size, which wraps around while fewer than 100 positions exist.
     **The tensor-voting map construction (`ComputeTensorVote`, `ComputeTensorEigen`,
     `TensorVotePass1`/`TensorVotePass2`) and the point-to-ellipsoid measurement model
     (`TensorRegistration`, ported as `hShareModel`) are transcribed as closely to

@@ -53,10 +53,11 @@ struct Config
   int pub_map_n_secs = 10;
 
   // lidar.*
-  /// LidType: 1=Livox, 2=Velodyne, 3=Ouster, 4=Hesai, 5=Gazebo. Kept for
-  /// documentation/config-schema parity with upstream; this port receives
-  /// already-decoded points (see LidarPointVector) so no vendor-specific
-  /// point decoding happens here anymore.
+  /// LidType: 1=Livox, 2=Velodyne, 3=Ouster, 4=Hesai, 5=Gazebo, 6=XYZ-only
+  /// simulator points. Kept for documentation/config-schema parity with
+  /// upstream; this port receives already-decoded points (see
+  /// LidarPointVector) so no vendor-specific point decoding happens here
+  /// anymore.
   int lidar_type = 4;
   int lidar_rate = 10;
   int lidar_scan_lines = 64;
@@ -116,6 +117,8 @@ struct Analytics
   double obs_score = 0;
   double vert_score = 0;
   double bin_score = 0;
+  double cov_score = 0;
+  double wt_score = 0;
 
   int64_t num_planes = 0;
   int64_t num_lines = 0;
@@ -123,14 +126,16 @@ struct Analytics
   int64_t num_feats = 0;
   int64_t num_reject = 0;
 
-  double wt_mean = 0;
-  double wt_std = 0;
-  double wt_min = 0;
-  double wt_max = 0;
+  /// Per-feature weights before (og_*) and after (sc_*) their scaling.
+  double og_wt_mean = 0;
+  double og_wt_std = 0;
+  double og_wt_min = 0;
+  double og_wt_max = 0;
 
-  double rng_min = 0;
-  double rng_max = 0;
-  double rng_mean = 0;
+  double sc_wt_mean = 0;
+  double sc_wt_std = 0;
+  double sc_wt_min = 0;
+  double sc_wt_max = 0;
 
   double imu_time = 0;
   double state_time = 0;

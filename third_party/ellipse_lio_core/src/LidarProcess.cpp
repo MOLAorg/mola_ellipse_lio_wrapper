@@ -21,7 +21,6 @@ LidarProcess::LidarProcess(LidarParams params, float map_resolution, LogFn log)
 {
   num_bins_ = static_cast<int>(std::ceil(params_.max_range + 1));
   scan_res_ = static_cast<float>(kPi * (params_.vertical_fov / (params_.scan_lines - 1)) / 180.0);
-  max_octree_res_ = 10;
 
   bin_pcs_i_ = Eigen::ArrayXi::Zero(num_bins_);
   bin_pcs_sizes_ = Eigen::ArrayXi::Zero(num_bins_);
@@ -58,7 +57,7 @@ LidarProcess::LidarProcess(LidarParams params, float map_resolution, LogFn log)
     octree_res = std::floor(octree_res * 100.0f) / 100.0f;
     octree_res = std::fmax(octree_res, static_cast<float>(kMinBinRes));
 
-    match_rad = std::fmax(10.0f * octree_res, static_cast<float>(kMinSearchRes));
+    match_rad = std::fmin(std::fmax(10.0f * octree_res, static_cast<float>(kMinSearchRes)), 10.0f);
     search_rad = std::fmin(
       std::fmax(10.0f * octree_res, static_cast<float>(kMinSearchRes)),
       static_cast<float>(kMaxSearchRes));
@@ -127,7 +126,7 @@ void LidarProcess::ConvertScan(const LidarPointVector & points, double t_beg)
   }
 
   mean_bin_ = static_cast<int>(std::floor(mean_bin / mean_num));
-  start_bin_ = std::min(mean_bin_, static_cast<int>(max_octree_res_));
+  start_bin_ = std::min(mean_bin_, static_cast<int>(kMaxStartBin));
 }
 
 void LidarProcess::feedScan(const LidarPointVector & points, double t_beg, double t_end)
@@ -148,7 +147,7 @@ void LidarProcess::feedScan(const LidarPointVector & points, double t_beg, doubl
 
   int end_bin = num_bins_;
   int prev_start_bin = -1;
-  while (start_bin_ > prev_start_bin && prev_start_bin < max_octree_res_) {
+  while (start_bin_ > prev_start_bin && prev_start_bin < kMaxStartBin) {
 #pragma omp parallel for
     for (int i = 0; i < end_bin; i++) {
       std::vector<int> new_idxs, added_idxs;
@@ -187,7 +186,7 @@ void LidarProcess::feedScan(const LidarPointVector & points, double t_beg, doubl
 
     prev_start_bin = start_bin_;
     mean_bin_ = static_cast<int>(std::floor(mean_bin / mean_num));
-    start_bin_ = std::min(mean_bin_, static_cast<int>(max_octree_res_));
+    start_bin_ = std::min(mean_bin_, static_cast<int>(kMaxStartBin));
     end_bin = start_bin_;
   }
 

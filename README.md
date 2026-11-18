@@ -2,12 +2,12 @@
 
 A [MOLA](https://github.com/MOLAorg/mola) wrapper around
 [EllipseLIO](https://github.com/v4rl-ucy/ellipselio) that mimics the interface of
-[`mola-lidar-odometry-cli`](https://docs.mola-slam.org/latest/mola_lidar_odometry_cli.html),
-in the same spirit as [`mola_fast_lio2_wrapper`](https://github.com/MOLAorg/mola_fast_lio2_wrapper),
+[`mola-lidar-odometry-cli`](https://docs.mola-slam.org/latest/mola_lo_apps.html#mola-lidar-odometry-cli),
 so EllipseLIO can be run on any MOLA-supported dataset for comparison against other
 LiDAR-odometry methods.
 
-**Status: private, work in progress, internal research use only.**
+**Status:** research wrapper, work in progress. Read the known issue below before relying
+on its results.
 
 ## What this provides
 
@@ -28,9 +28,8 @@ support), so the same core logic backs both the live module and the offline CLI.
 ## Datasets
 
 - **Oxford Spires**: via the generic `mola::Rosbag2Dataset` (package `mola_input_rosbag2`),
-  same approach as `mola_lidar_odometry`'s and `mola_fast_lio2_wrapper`'s own Oxford
-  Spires launch files.
-- MulRan is not wired up for this wrapper (out of scope, see the implementation plan).
+  same approach as `mola_lidar_odometry`'s own Oxford Spires launch files.
+- MulRan is not wired up for this wrapper yet.
 - **LiDAR-only rawlogs** (e.g. MVSim synthetic datasets): `--input-rawlog`
   plus `--synthetic-imu`, which interleaves a constant-gravity, zero-rate IMU
   sample before each scan (the same decorator the other LIO wrappers use).
@@ -60,7 +59,7 @@ scripts/mola-ellipselio-gui-oxford-spires /path/to/oxford-spires/data/sequences/
 scripts/mola-ellipselio-gui-oxford-spires /path/to/oxford-spires/data/sequences/<seq>/ --headless
 
 # Offline, lossless, with TUM trajectory output:
-SEQ=/mnt/datasets/public/oxford-spires/2024-03-13-observatory-quarter-01
+SEQ=/path/to/oxford-spires/2024-03-13-observatory-quarter-01
 BAG=$SEQ/raw/ros2bag/1710338090_2024-03-13-13-54-51
 LIDAR_POSE_X=0 LIDAR_POSE_Y=0 LIDAR_POSE_Z=0 LIDAR_POSE_YAW=0 LIDAR_POSE_PITCH=0 LIDAR_POSE_ROLL=0 \
 MOLA_USE_FIXED_LIDAR_POSE=true \
@@ -128,13 +127,11 @@ Two extra, env-gated, zero-cost-when-off debug dumps (`third_party/ellipse_lio_c
 **This port diverges early** (within roughly the first 15-30 s) on both
 `2024-03-13-observatory-quarter-01` and `2024-03-14-blenheim-palace-01`: the
 accelerometer bias and gravity-vector estimates run away during the iterated-EKF
-update, well before any aggressive motion occurs. See the implementation plan
-([`lio-wrappers-ellipselio.md`](../../../../plans/lio-wrappers-ellipselio.md), E13 and
-Open items) for the full validation numbers and the diagnostic steps taken (extrinsic
-cross-checked numerically, an adaptive-weighting ablation test performed, both Oxford
-Spires validation sequences tried, upstream's own `min_range: 0.0` vs. our `1.0`
-default tried). No root cause was conclusively identified within this session; this is
-recorded as a known-broken item, not silently worked around.
+update, well before any aggressive motion occurs. Diagnostic steps taken so far: the
+extrinsic was cross-checked numerically, an adaptive-weighting ablation test was
+performed, both sequences were tried, and upstream's own `min_range: 0.0` was tried
+against our `1.0` default. No root cause has been identified yet; this is recorded as a
+known-broken item, not silently worked around.
 
 Note that until the IMU extrinsic was read from the documented
 `imu_pose_in_lidar` key, the module silently used an identity extrinsic, while
@@ -149,6 +146,5 @@ sequences remain to be re-checked with that fix.
   (`test_ellipse_lio_core`, a synthetic stationary-room scan sequence). It builds with
   `-DPCL_NO_PRECOMPILE` for the same ABI-safety reason `fast_lio2_core` does -- see that
   package's README for the full explanation.
-- Unlike `mola_fast_lio2_wrapper`, there is **no GPLv2/GPLv3 license-incompatibility
-  blocker** here: EllipseLIO and its i-Octree/IKFoM dependencies are MIT and BSD-3, both
-  compatible with this repository's GPL-3.0. See `THIRD_PARTY_NOTICES.md`.
+- EllipseLIO and its i-Octree/IKFoM dependencies are MIT and BSD-3, both compatible
+  with this repository's GPL-3.0. See `THIRD_PARTY_NOTICES.md`.

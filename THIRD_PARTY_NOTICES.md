@@ -10,7 +10,7 @@ except where explicitly noted.
 
 - Upstream: https://github.com/v4rl-ucy/ellipselio
 - Commit pinned: `15655fe888f928c0337959c3afb7d29504df65ac` (2026-10-09)
-- License: **MIT**.
+- License: **MIT**, full text in `third_party/ellipse_lio_core/LICENSE`.
 - Copyright (c) 2026 Rowan Border and Margarita Chli.
 - Paper: Border & Chli, *EllipseLIO: Adaptive LiDAR Inertial Odometry with an Ellipsoid
   Representation*, arXiv:2605.21150.
@@ -119,17 +119,11 @@ except where explicitly noted.
   `mola_fast_lio2_wrapper`'s `g_active_core` thread-local pointer, which exists to work
   around exactly that plain-function-pointer limitation in vanilla IKFoM).
 
-## Licensing note: no GPLv2/GPLv3 incompatibility here
+## Licensing note
 
-Unlike `mola_fast_lio2_wrapper` (which wraps GPL-2.0-only Fast-LIO2/ikd-Tree code
-inside a GPL-3.0-only MOLA module -- a real license incompatibility, documented in that
-repository's own `THIRD_PARTY_NOTICES.md`), **this repository has no such issue**:
-EllipseLIO is MIT-licensed, i-Octree is MIT-licensed, and IKFoM is BSD-3-Clause. MIT and
-BSD-3 are both permissive licenses fully compatible with combination into a GPL-3.0-only
-work (this repository's own license). A future reader should not assume the fastlio2
-wrapper's GPLv2-vs-GPLv3 caveat applies here -- it does not.
-
-This repository is currently **private and used for internal research only**.
+EllipseLIO is MIT-licensed, i-Octree is MIT-licensed, and the vendored IKFoM files carry
+BSD-3-Clause headers. MIT and BSD-3 are both permissive licenses compatible with
+combination into a GPL-3.0-only work (this repository's own license).
 
 ## Known issue
 
@@ -137,6 +131,6 @@ See `README.md`'s "Known issue: divergence on Oxford Spires" section: this port
 diverges early on both Oxford Spires validation sequences tried. The algorithm logic
 was transcribed as faithfully as the ROS-type removal allows (see the file-by-file
 notes above), and a divergence-hunting session did not conclusively identify a root
-cause (see the implementation plan's Open items). This is recorded here because it
+cause. This is recorded here because it
 bears on how much weight to put on this port when comparing EllipseLIO's true published
 behavior against this wrapper's output.

@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 
 namespace ellipse_lio_core
 {
@@ -923,7 +924,11 @@ void EllipseLioCore::tryProcess()
 
   if (map_counter_) {
     ekfom_iter_cnt_ = 0;
-    imu_process_->UpdateStatesWithLidar(&kf_state_, scan_end_time_, 0.5 / lidar_params_.rate);
+    // Upstream's real-time budget (the update stops at half of it), or none:
+    const double maxSolveTime = cfg_.iekf_wall_clock_limit
+                                  ? 0.5 / lidar_params_.rate
+                                  : std::numeric_limits<double>::infinity();
+    imu_process_->UpdateStatesWithLidar(&kf_state_, scan_end_time_, maxSolveTime);
   }
   const double t3 = omp_get_wtime();
 

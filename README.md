@@ -90,6 +90,21 @@ the LiDAR's when `baselink2lidar_pose_str` is left at identity. See
 `third_party/ellipse_lio_core/include/ellipse_lio_core/Types.hpp`'s `Config` struct for
 the authoritative field list.
 
+## Determinism
+
+Upstream ends the iterated update of each scan once its wall-clock time exceeds a
+quarter of the scan period (25 ms at 10 Hz), which keeps the filter real-time on a
+multi-core CPU. The number of iterations, and so the result, then depends on the CPU
+speed and on its load: two runs of the same input differ, and on a single thread the
+limit cuts the update short on most scans of geometrically demanding sequences.
+
+`iekf_wall_clock_limit: false` (env `ELLIPSELIO_IEKF_WALL_CLOCK_LIMIT=false` in the
+shipped pipelines) lifts it. The update is then bounded by its iteration count only,
+and two runs of the same input produce byte-identical output. This changes the results
+(more iterations per scan), and runs no longer keep up in real time on a slow CPU, so
+the default stays `true`, upstream's behavior. Use `false` for offline benchmarks and
+for perturbation or sensitivity studies.
+
 ## Instrumentation
 
 `ellipse_lio_core::OdometryOutput::analytics` mirrors upstream's own

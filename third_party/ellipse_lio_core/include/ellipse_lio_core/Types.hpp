@@ -71,6 +71,14 @@ struct Config
   double imu_gyr_bias = 1e-4;
   double imu_acc_bias = 1e-4;
 
+  /// Port addition, not in upstream's schema. Upstream ends the iterated
+  /// update of a scan once it has run for a quarter of the scan period, to
+  /// keep up in real time, so the number of iterations depends on the CPU
+  /// speed and load and runs are not reproducible. `false` lifts that limit:
+  /// the update is then bounded by its iteration count only, and offline runs
+  /// are deterministic.
+  bool iekf_wall_clock_limit = true;
+
   /// LiDAR-to-IMU extrinsics: p_imu = r_imu_lidar * p_lidar + t_imu_lidar.
   /// Despite the upstream field names ("t_imu_lidar"/"r_imu_lidar"), this was
   /// verified (see the pipeline YAML comment and the plan's E10 cross-check)

@@ -115,6 +115,8 @@ void EllipseLioOdometry::initialize_frontend(const Yaml & cfg)
   YAML_LOAD_OPT3(core_cfg_, imu_gyr_bias, double);
   YAML_LOAD_OPT3(core_cfg_, imu_acc_bias, double);
 
+  YAML_LOAD_OPT3(core_cfg_, iekf_wall_clock_limit, bool);
+
   YAML_LOAD_OPT3(visualization_params_, show_trajectory, bool);
   YAML_LOAD_OPT3(visualization_params_, show_localmap, bool);
   YAML_LOAD_OPT3(visualization_params_, camera_follows_vehicle, bool);

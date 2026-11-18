@@ -17,6 +17,7 @@
 
 /// @name Physical Constants
 /// @{
+inline constexpr double kMaxStartBin = 10.0;
 inline constexpr int kMinNeighbours = 6;
 inline constexpr int kMaxNeighbours = 60;
 inline constexpr double kMinMapRes = 0.1;

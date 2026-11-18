@@ -17,6 +17,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <numeric>
 
 namespace ellipse_lio_core
 {
@@ -42,7 +43,6 @@ EllipseLioCore::EllipseLioCore(const Config & cfg, LogFn log) : cfg_(cfg), log_(
   map_cloud_->reserve(kMaxMapPoints);
   raw_cloud_->reserve(kMaxProcPoints);
   scan_cloud_->reserve(kMaxProcPoints);
-  scan_cloud_grav_->reserve(kMaxProcPoints);
   filter_cloud_->reserve(kMaxProcPoints);
   buffer_cloud_->reserve(kMaxProcPoints);
 
@@ -51,12 +51,12 @@ EllipseLioCore::EllipseLioCore(const Config & cfg, LogFn log) : cfg_(cfg), log_(
   ioctree_.SetMaxNewPoints(kMaxProcPoints);
   ioctree_.SetMinExtent(static_cast<float>(map_resolution_));
 
-  ekfom_data_sb_ = Eigen::ArrayXd::Zero(100);
-  ekfom_data_om_ = Eigen::ArrayXd::Zero(100);
-  ekfom_data_oe_ = Eigen::ArrayXd::Zero(100);
-  ekfom_data_w_ = Eigen::ArrayXd(kMaxProcPoints);
+  mean_score_wt_ = Eigen::ArrayXXd::Zero(100, 5);
+
   ekfom_data_ot_ = Eigen::ArrayXXd(kMaxProcPoints, 3);
   ekfom_data_or_ = Eigen::ArrayXXd(kMaxProcPoints, 3);
+
+  ekfom_data_w_ = Eigen::ArrayXd(kMaxProcPoints);
   ekfom_data_h_ = Eigen::VectorXd(kMaxProcPoints);
   ekfom_data_w_x_ = Eigen::ArrayXd(kMaxProcPoints);
   ekfom_data_h_x_ = Eigen::MatrixXd(kMaxProcPoints, 6);
@@ -96,6 +96,12 @@ EllipseLioCore::EllipseLioCore(const Config & cfg, LogFn log) : cfg_(cfg), log_(
   n_cnts_ = Eigen::ArrayXXi::Zero(kMaxProcPoints, lid_process_->num_bins_);
   n_bins_ = Eigen::ArrayXXi::Zero(kMaxProcPoints, lid_process_->num_bins_);
 
+  grav_bin_pcs_ = std::vector<EllipseLioPointCloud>(lid_process_->num_bins_);
+  for (auto & pc : grav_bin_pcs_) {
+    pc.reserve(kMaxProcPoints);
+  }
+
+  cov_scale_bins_ = Eigen::ArrayXXd::Zero(lid_process_->num_bins_, 3);
   raw_cloud_bins_ = Eigen::ArrayXi::Zero(lid_process_->num_bins_);
   scan_cloud_bins_ = Eigen::ArrayXi::Zero(lid_process_->num_bins_);
   buffer_cloud_bins_ = Eigen::ArrayXi::Zero(lid_process_->num_bins_);
@@ -299,26 +305,30 @@ void EllipseLioCore::SyncRawCloudWithImu()
     }
   }
 
+  const float bin_score = static_cast<float>(start_bin_ / kMaxStartBin);
+  if (start_mean_cnt_ < 0) {
+    mean_score_wt_.col(4) += std::fmin(std::fmax(bin_score, 1e-4), 1.0);
+  } else {
+    mean_score_wt_.col(4)(start_mean_cnt_) = std::fmin(std::fmax(bin_score, 1e-4), 1.0);
+  }
+  start_mean_cnt_ = (start_mean_cnt_ + 1) % static_cast<int>(mean_score_wt_.rows());
+
   raw_cloud_->clear();
   raw_cloud_bins_.setZero();
   raw_start_time_ = 0;
   raw_end_time_ = 0;
 
-  if (!ekfom_data_sb_.sum()) {
-    ekfom_data_sb_ += std::min(std::max(start_bin_ / 10.0, 1e-4), 1.0);
-  } else {
-    ekfom_data_sb_[start_bin_cnt_] = std::min(std::max(start_bin_ / 10.0, 1e-4), 1.0);
-  }
-  start_bin_cnt_ = (start_bin_cnt_ + 1) % static_cast<int>(ekfom_data_sb_.size());
-
+  analytics_.mean_bin = mean_bin_;
+  analytics_.start_bin = start_bin_;
   analytics_.imu_offset = imu_time_offset_;
   analytics_.lid_offset = lid_time_offset_;
   analytics_.scan_size = static_cast<int64_t>(scan_cloud_->size());
   analytics_.buffer_size = static_cast<int64_t>(buffer_cloud_->size());
+  analytics_.bin_score = mean_score_wt_.col(4).mean();
   analytics_.scan_time = scan_end_time_ - scan_start_time_;
 }
 
-void EllipseLioCore::ComputeTensorVote(int i, int j, M3F * A_j, bool first_pass)
+void EllipseLioCore::ComputeTensorVote(int i, int j, M3F & A_j, bool first_pass)
 {
   V3F p_i = map_cloud_->points[i].getVector3fMap();
   V3F p_j = map_cloud_->points[j].getVector3fMap();
@@ -334,18 +344,26 @@ void EllipseLioCore::ComputeTensorVote(int i, int j, M3F * A_j, bool first_pass)
   if (!first_pass) {
     K_j = tensors_p2_[j];
   }
-  *A_j = c_ij * R_ij * K_j * Rp_ij;
+  A_j = c_ij * R_ij * K_j * Rp_ij;
 }
 
-void EllipseLioCore::ComputeTensorEigen(int i, M3F * tensor, bool first_pass)
+void EllipseLioCore::ComputeTensorEigen(int i, M3F & tensor, bool first_pass)
 {
   V3F eig_val, sali_val;
   M3F eig_vec, tensor_i2;
   Eigen::SelfAdjointEigenSolver<M3F> eig_solver;
 
-  eig_solver.computeDirect(*tensor);
+  eig_solver.computeDirect(tensor);
+  if (eig_solver.info() != Eigen::ComputationInfo::Success) {
+    if (log_) {
+      log_(3, "EllipseLioCore: Eigen solve failed");
+    }
+    filters_[i][!first_pass] = false;
+    return;
+  }
+
   eig_vec = eig_solver.eigenvectors();
-  eig_val = eig_solver.eigenvalues().cwiseAbs();
+  eig_val = eig_solver.eigenvalues().cwiseAbs().cwiseMax(1e-3f);
 
   const int & bin_idx = map_cloud_->points[i].bin_idx;
   const float & search_rad = lid_process_->search_radii_[bin_idx];
@@ -360,13 +378,13 @@ void EllipseLioCore::ComputeTensorEigen(int i, M3F * tensor, bool first_pass)
     sali_val(1) = eig_val(1) - eig_val(0);
     sali_val(2) = eig_val(0);
     sali_val.maxCoeff(&saliency_idxs_[i]);
+    salivalues_[i] = sali_val / sali_val.sum();
 
-    filters_[i][1] = true;
-    salivalues_[i] = sali_val;
-    eigenvalues_[i] = (1.0 / (eig_val.array() + 1e-10)).matrix().normalized();
+    eigenvalues_[i] = eig_val.cwiseInverse().normalized();
     eigenvalues_[i] *= search_rad;
     eigenvectors_[i] = eig_vec;
-    map_cloud_->points[i].prim_type = (saliency_idxs_[i] + 1) * 85;
+
+    filters_[i][1] = true;
   }
 }
 
@@ -430,7 +448,7 @@ void EllipseLioCore::TensorVotePass1(
     for (int j = 0; j < loop_cnt; j++) {
       M3F A_j;
       const int map_j = neighbours_[map_i][j];
-      ComputeTensorVote(map_i, map_j, &A_j, true);
+      ComputeTensorVote(map_i, map_j, A_j, true);
       K.row(j) = A_j.reshaped(1, 9);
 
       if (map_j >= old_map_size) {
@@ -464,7 +482,7 @@ void EllipseLioCore::TensorVotePass1(
     }
 
     tensor_i1 = tensors_p1_[map_i] / static_cast<float>(loop_cnt);
-    ComputeTensorEigen(map_i, &tensor_i1, true);
+    ComputeTensorEigen(map_i, tensor_i1, true);
   }
 
   updated_idxs.resize(new_neighbours_idx);
@@ -499,7 +517,7 @@ void EllipseLioCore::TensorVotePass1(
       M3F A_j;
       const int map_j = new_neighbours_[i][j];
       neighbours_[map_i][old_size + j] = map_j;
-      ComputeTensorVote(map_i, map_j, &A_j, true);
+      ComputeTensorVote(map_i, map_j, A_j, true);
       K.row(j) = A_j.reshaped(1, 9);
     }
 
@@ -511,7 +529,7 @@ void EllipseLioCore::TensorVotePass1(
     }
 
     tensor_i1 = tensors_p1_[map_i] / static_cast<float>(neighbours_[map_i].size());
-    ComputeTensorEigen(map_i, &tensor_i1, true);
+    ComputeTensorEigen(map_i, tensor_i1, true);
   }
   updated_idxs.resize(upd_idx);
 }
@@ -549,7 +567,7 @@ void EllipseLioCore::TensorVotePass2(std::vector<int> & added_idxs, std::vector<
       }
 
       M3F A_j;
-      ComputeTensorVote(map_i, map_j, &A_j, false);
+      ComputeTensorVote(map_i, map_j, A_j, false);
       K.row(j) = A_j.reshaped(1, 9);
       K_filter(j) = 1;
     }
@@ -561,7 +579,7 @@ void EllipseLioCore::TensorVotePass2(std::vector<int> & added_idxs, std::vector<
 
     tensor_i2 = K.colwise().sum().reshaped(3, 3);
     tensor_i2 /= static_cast<float>(filter_cnt);
-    ComputeTensorEigen(map_i, &tensor_i2, false);
+    ComputeTensorEigen(map_i, tensor_i2, false);
   }
 }
 
@@ -646,25 +664,45 @@ void EllipseLioCore::MapIncremental()
 void EllipseLioCore::hShareModel(
   state_ikfom & s, esekfom::dyn_share_datastruct<double> & ekfom_data)
 {
-  double t0, res_mean;
-  int feat_tot, reject_cnt, start_bin_scale;
-  float grav_check, vert_score;
-  float wt_min, wt_max, wt_mean, wt_std, obs_min;
-  float rng_min, rng_max, rng_mean, rng_min_scale, rng_max_scale;
+  double res_mean;
+  int feat_tot;
+  int reject_cnt;
+  int start_bin_scale;
+  float grav_check;
+  float vert_score;
+  float cov_score;
+  float wt_min;
+  float wt_max;
+  float wt_mean;
+  float wt_std;
+  float wt_score;
+  float obs_min;
+  float rng_min;
+  float rng_max;
+  float rng_mean;
+  float rng_min_scale;
+  float rng_max_scale;
 
   Eigen::Array3i cnts(3);
   std::atomic<int> feat_cnt;
+  std::atomic<int> bin_cnt;
   std::vector<std::atomic<int>> prim_cnts(3);
 
-  M3F cov_mat;
-  V3D rot_obs, tran_obs, cov_scales;
-  V3F grav_norm, poses_diff, poses_orth, grav_x, grav_y, grav_z;
+  V3D rot_obs;
+  V3D tran_obs;
+  V3D cov_scale;
+  V3F grav_norm;
+  V3F poses_diff;
+  V3F poses_orth;
+  V3F grav_x;
+  V3F grav_y;
+  V3F grav_z;
 
   Eigen::Quaternionf gq;
   Eigen::Matrix4f tf_grav;
-  Eigen::Vector4f centroid = Eigen::Vector4f::Zero();
 
   feat_cnt = 0;
+  bin_cnt = 0;
   prim_cnts[0] = 0;
   prim_cnts[1] = 0;
   prim_cnts[2] = 0;
@@ -676,9 +714,10 @@ void EllipseLioCore::hShareModel(
   grav_check *= std::fabs(grav_norm.dot(poses_diff.normalized()));
 
   poses_orth = poses_diff - grav_norm * grav_norm.dot(poses_diff);
-  vert_score = 1.0f - (((100.0f / mean_bin_) * grav_check) / poses_orth.norm());
+  vert_score = static_cast<float>(
+    1.0 -
+    (((lidar_params_.max_range / static_cast<float>(mean_bin_)) * grav_check) / poses_orth.norm()));
 
-  scan_cloud_grav_->resize(scan_cloud_->size());
   gq = Eigen::Quaternionf::FromTwoVectors(grav_norm, V3F::UnitZ());
   gq = gq * s.rot.cast<float>() * s.offset_R_L_I.cast<float>();
 
@@ -690,24 +729,45 @@ void EllipseLioCore::hShareModel(
   grav_y = gq.toRotationMatrix().col(1);
   grav_z = gq.toRotationMatrix().col(2);
 
-  pcl::transformPointCloud(*scan_cloud_, *scan_cloud_grav_, tf_grav);
-  pcl::compute3DCentroid(*scan_cloud_grav_, centroid);
-  pcl::computeCovarianceMatrixNormalized(*scan_cloud_grav_, centroid, cov_mat);
+  // Gravity-aligned spread of the scan, per range bin:
+#pragma omp parallel for
+  for (int i = 0; i < static_cast<int>(scan_cloud_bins_.size()); i++) {
+    if (scan_cloud_bins_[i] < kMinNeighbours) {
+      cov_scale_bins_.row(i).setZero();
+      continue;
+    }
 
-  const float mean_bin_arc =
-    static_cast<float>(lidar_params_.vertical_fov * kPi * mean_bin_ / 180.0);
-  const float cov_score = std::fmin(std::fabs(cov_mat(2, 2)) / mean_bin_arc, 1.0f);
+    M3F cov_mat;
+    pcl::Indices bin_indices;
+    Eigen::Vector4f centroid = Eigen::Vector4f::Zero();
 
-  cov_scales = cov_mat.diagonal().cast<double>();
-  cov_scales(2) *= cov_score;
-  cov_scales(2) *= 180.0 / lidar_params_.vertical_fov;
-  cov_scales /= cov_scales.maxCoeff();
+    const int start_idx = i ? scan_cloud_bins_.head(i).sum() : 0;
+    const int end_idx = scan_cloud_bins_.head(i + 1).sum();
+    bin_indices.resize(end_idx - start_idx);
+    std::iota(bin_indices.begin(), bin_indices.end(), start_idx);
+
+    grav_bin_pcs_[i].resize(scan_cloud_bins_[i]);
+    pcl::transformPointCloud(*scan_cloud_, bin_indices, grav_bin_pcs_[i], tf_grav);
+    pcl::compute3DCentroid(grav_bin_pcs_[i], centroid);
+    pcl::computeCovarianceMatrixNormalized(grav_bin_pcs_[i], centroid, cov_mat);
+
+    cov_scale_bins_.row(i) = cov_mat.diagonal().array().cast<double>();
+    const float bin_arc = static_cast<float>(lidar_params_.vertical_fov * kPi * (i + 1) / 180.0);
+    float arc_ratio = static_cast<float>(std::fmin(cov_scale_bins_(i, 2) / bin_arc, 1.0));
+    arc_ratio = static_cast<float>(
+      arc_ratio * std::pow(std::fmax(90.0 / lidar_params_.vertical_fov, 1.0), 2.0));
+
+    cov_scale_bins_(i, 2) *= arc_ratio;
+    cov_scale_bins_.row(i) /= cov_scale_bins_.row(i).maxCoeff();
+
+    bin_cnt++;
+  }
+
+  cov_scale = cov_scale_bins_.colwise().sum() / static_cast<double>(bin_cnt.load());
+  cov_score = static_cast<float>(std::fmin(10.0 * cov_scale.minCoeff(), 1.0));
 
   start_bin_scale =
     static_cast<int>(std::floor(kMaxSearchRes / lid_process_->match_radii_.front()));
-
-  t0 = omp_get_wtime();
-  (void)t0;
 
 #pragma omp parallel for
   for (int i = 0; i < static_cast<int>(scan_cloud_->size()); i++) {
@@ -739,8 +799,9 @@ void EllipseLioCore::hShareModel(
 
     curr_traj_dist = traj_dist_.back();
     curr_traj_dist += (s.pos.cast<float>() - poses_.back()).norm();
-    if (inc_search_rad > curr_traj_dist) {
-      inc_search_rad = std::fmax(0.5f * inc_search_rad, static_cast<float>(kMinSearchRes));
+    if (inc_search_rad > curr_traj_dist && s.vel.norm() > 0.1) {
+      inc_search_rad =
+        static_cast<float>(std::fmax(std::fmin(s.vel.norm(), 1.0) * inc_search_rad, kMinSearchRes));
     }
 
     ioctree_.KnnNeighbors(p_world, 1, N_idxs, N_dst, inc_search_rad);
@@ -755,14 +816,15 @@ void EllipseLioCore::hShareModel(
 
     traj_diff = curr_traj_dist;
     traj_diff -= traj_dist_[map_cloud_->points[map_i].scan_idx];
-    bin_scale = std::fmax(std::fmin(bin_idx / 4.0f, 10.0f), static_cast<float>(start_bin_scale));
+    bin_scale = static_cast<float>(std::fmax(0.1 * bin_idx, start_bin_scale));
     if (
-      map_cloud_->points[map_i].scan_idx && s.vel.norm() > 0.1 &&
-      match_rad > bin_scale * search_rad && traj_diff < match_rad / bin_scale) {
+      map_cloud_->points[map_i].scan_idx > std::floor(bin_idx / kMaxStartBin) &&
+      s.vel.norm() > 0.1 && match_rad > bin_scale * search_rad &&
+      traj_diff < match_rad / bin_scale) {
       continue;
     }
 
-    scores = salivalues_[map_i] / salivalues_[map_i].sum();
+    scores = salivalues_[map_i];
     n_world = map_cloud_->points[map_i].getVector3fMap();
     q = p_world - n_world;
 
@@ -787,10 +849,9 @@ void EllipseLioCore::hShareModel(
     a_world = (s.rot * a).normalized().cast<float>();
     h_x_vec << norm_vec(0), norm_vec(1), norm_vec(2), a[0], a[1], a[2];
 
-    obs_trans = cov_scales * std::pow(scores(0), 2);
-    obs_trans(0) *= std::fabs(norm_vec.dot(grav_x));
-    obs_trans(1) *= std::fabs(norm_vec.dot(grav_y));
-    obs_trans(2) *= std::fabs(norm_vec.dot(grav_z));
+    obs_trans(0) = std::fabs(norm_vec.dot(grav_x));
+    obs_trans(1) = std::fabs(norm_vec.dot(grav_y));
+    obs_trans(2) = std::fabs(norm_vec.dot(grav_z));
     obs_rot(0) = std::fabs(a_world.dot(grav_x));
     obs_rot(1) = std::fabs(a_world.dot(grav_y));
     obs_rot(2) = std::fabs(a_world.dot(grav_z));
@@ -826,7 +887,8 @@ void EllipseLioCore::hShareModel(
   wt_max = ekfom_data_w_.head(feat_tot).maxCoeff();
   wt_mean = ekfom_data_w_.head(feat_tot).mean();
   wt_std = (ekfom_data_w_.head(feat_tot) - wt_mean).square().sum();
-  wt_std = std::sqrt(wt_std / (feat_tot - 1));
+  wt_std = static_cast<float>(std::sqrt(wt_std / std::fmax(feat_tot - 1, 1)));
+  wt_score = static_cast<float>(2.0 - std::fmin(std::fmax(wt_std / 1e3, 1.0), 2.0));
 
   rng_min = wt_mean - wt_std;
   rng_min = std::fmax(rng_min, wt_min);
@@ -834,14 +896,12 @@ void EllipseLioCore::hShareModel(
   rng_mean = wt_mean - rng_min;
   rng_max = wt_max - rng_min;
   rng_max = std::fmin(rng_mean + wt_std, rng_max);
-  rng_max_scale = rng_max / ((wt_max * rng_min_scale) - rng_min);
+  rng_max_scale = static_cast<float>(rng_max / std::fmax((wt_max * rng_min_scale) - rng_min, 1e-4));
 
-  if (wt_std) {
-    ekfom_data_w_.head(feat_tot) *= rng_min_scale;
-    ekfom_data_w_.head(feat_tot) -= rng_min;
-    ekfom_data_w_.head(feat_tot) *= rng_max_scale;
-    ekfom_data_w_.head(feat_tot) += 1.0;
-  }
+  ekfom_data_w_.head(feat_tot) *= rng_min_scale;
+  ekfom_data_w_.head(feat_tot) -= rng_min;
+  ekfom_data_w_.head(feat_tot) *= rng_max_scale;
+  ekfom_data_w_.head(feat_tot) += 1.0;
 
   tran_obs = ekfom_data_ot_.topRows(feat_tot).colwise().sum() + 1e-4;
   rot_obs = ekfom_data_or_.topRows(feat_tot).colwise().sum() + 1e-4;
@@ -851,65 +911,66 @@ void EllipseLioCore::hShareModel(
 
   obs_min = 1e4f * static_cast<float>(rot_obs.minCoeff() * tran_obs.minCoeff());
 
-  if (!ekfom_data_om_.sum()) {
-    ekfom_data_om_ += std::fmin(std::fmax(obs_min, 1e-4f), 1.0f);
-    ekfom_data_oe_ += std::fmin(std::fmax(vert_score, 1e-4f), 1.0f);
+  if (ekfom_mean_cnt_ < 0) {
+    mean_score_wt_.col(0) += std::fmin(std::fmax(obs_min, 1e-4), 1.0);
+    mean_score_wt_.col(1) += std::fmin(std::fmax(vert_score, 1e-4), 1.0);
+    mean_score_wt_.col(2) += std::fmin(std::fmax(cov_score, 1e-4), 1.0);
+    mean_score_wt_.col(3) += std::fmin(std::fmax(wt_score, 1e-4), 1.0);
   } else {
-    ekfom_data_om_[ekfom_obs_cnt_] = std::fmin(std::fmax(obs_min, 1e-4f), 1.0f);
-    ekfom_data_oe_[ekfom_vert_cnt_] = std::fmin(std::fmax(vert_score, 1e-4f), 1.0f);
+    mean_score_wt_.col(0)(ekfom_mean_cnt_) = std::fmin(std::fmax(obs_min, 1e-4), 1.0);
+    mean_score_wt_.col(1)(ekfom_mean_cnt_) = std::fmin(std::fmax(vert_score, 1e-4), 1.0);
+    mean_score_wt_.col(2)(ekfom_mean_cnt_) = std::fmin(std::fmax(cov_score, 1e-4), 1.0);
+    mean_score_wt_.col(3)(ekfom_mean_cnt_) = std::fmin(std::fmax(wt_score, 1e-4), 1.0);
   }
-  ekfom_obs_cnt_ = (ekfom_obs_cnt_ + 1) % static_cast<int>(ekfom_data_om_.size());
-  ekfom_vert_cnt_ = (ekfom_vert_cnt_ + 1) % static_cast<int>(ekfom_data_oe_.size());
+  ekfom_mean_cnt_ = (ekfom_mean_cnt_ + 1) % static_cast<int>(mean_score_wt_.rows());
 
   obs_min =
-    static_cast<float>(ekfom_data_om_.mean() * ekfom_data_oe_.mean() * ekfom_data_sb_.mean());
-  obs_min = std::fmax(obs_min, 0.1f);
+    static_cast<float>(std::fmax(std::fmin(mean_score_wt_.colwise().mean().prod(), 1.0), 0.1));
+
   ekfom_data_w_.head(feat_tot) = ekfom_data_w_.head(feat_tot).pow(obs_min);
   ekfom_data_h_.block(0, 0, feat_tot, 1) = ekfom_data_h_v_.head(feat_tot);
   ekfom_data_w_x_.block(0, 0, feat_tot, 1) = ekfom_data_w_.head(feat_tot);
   ekfom_data_h_x_.block(0, 0, feat_tot, 6) = ekfom_data_h_x_v_.topRows(feat_tot);
+  ekfom_data_h_x_r_.leftCols(feat_tot) =
+    (ekfom_data_h_x_.topRows(feat_tot).array().colwise() * ekfom_data_w_x_.head(feat_tot))
+      .transpose();
+  ekfom_data.h = ekfom_data_h_.head(feat_tot);
+  ekfom_data.h_x = ekfom_data_h_x_.topRows(feat_tot);
+  ekfom_data.h_x_R = ekfom_data_h_x_r_.leftCols(feat_tot);
+
+  res_mean = -ekfom_data_h_.head(feat_tot).sum() / feat_tot;
+
+  analytics_.num_planes = cnts(0);
+  analytics_.num_lines = cnts(1);
+  analytics_.num_balls = cnts(2);
+
+  analytics_.obs_min = obs_min;
+  analytics_.res_mean = res_mean;
+  analytics_.num_feats = feat_tot;
+  analytics_.num_reject = reject_cnt;
+
+  analytics_.obs_score = mean_score_wt_.col(0).mean();
+  analytics_.vert_score = mean_score_wt_.col(1).mean();
+  analytics_.cov_score = mean_score_wt_.col(2).mean();
+  analytics_.wt_score = mean_score_wt_.col(3).mean();
+
+  analytics_.og_wt_std = wt_std;
+  analytics_.og_wt_min = wt_min;
+  analytics_.og_wt_max = wt_max;
+  analytics_.og_wt_mean = wt_mean;
 
   wt_min = ekfom_data_w_.head(feat_tot).minCoeff();
   wt_max = ekfom_data_w_.head(feat_tot).maxCoeff();
   wt_mean = ekfom_data_w_.head(feat_tot).mean();
   wt_std = (ekfom_data_w_.head(feat_tot) - wt_mean).square().sum();
-  wt_std = std::sqrt(wt_std / (feat_tot - 1));
+  wt_std = static_cast<float>(std::sqrt(wt_std / std::fmax(feat_tot - 1, 1)));
 
-  rng_min = 1;
-  rng_max += 1;
-  rng_mean += 1;
-
-  ekfom_data_h_x_r_.leftCols(feat_tot) =
-    (ekfom_data_h_x_.topRows(feat_tot).array().colwise() * ekfom_data_w_x_.head(feat_tot))
-      .transpose();
-
-  res_mean = -ekfom_data_h_.head(feat_tot).sum() / feat_tot;
-  ekfom_data.h = ekfom_data_h_.head(feat_tot);
-  ekfom_data.h_x = ekfom_data_h_x_.topRows(feat_tot);
-  ekfom_data.h_x_R = ekfom_data_h_x_r_.leftCols(feat_tot);
+  analytics_.sc_wt_std = wt_std;
+  analytics_.sc_wt_min = wt_min;
+  analytics_.sc_wt_max = wt_max;
+  analytics_.sc_wt_mean = wt_mean;
 
   ekfom_iter_cnt_++;
-
-  analytics_.num_planes = cnts(0);
-  analytics_.num_lines = cnts(1);
-  analytics_.num_balls = cnts(2);
-  analytics_.wt_std = wt_std;
-  analytics_.wt_min = wt_min;
-  analytics_.wt_max = wt_max;
-  analytics_.obs_min = obs_min;
-  analytics_.wt_mean = wt_mean;
-  analytics_.rng_min = rng_min;
-  analytics_.rng_max = rng_max;
-  analytics_.rng_mean = rng_mean;
-  analytics_.res_mean = res_mean;
-  analytics_.mean_bin = mean_bin_;
-  analytics_.start_bin = start_bin_;
-  analytics_.num_feats = feat_tot;
-  analytics_.num_reject = reject_cnt;
-  analytics_.kf_iterations = ekfom_iter_cnt_;
-  analytics_.obs_score = ekfom_data_om_.mean();
-  analytics_.vert_score = ekfom_data_oe_.mean();
-  analytics_.bin_score = ekfom_data_sb_.mean();
 }
 
 void EllipseLioCore::tryProcess()
@@ -929,6 +990,7 @@ void EllipseLioCore::tryProcess()
                                   ? 0.5 / lidar_params_.rate
                                   : std::numeric_limits<double>::infinity();
     imu_process_->UpdateStatesWithLidar(&kf_state_, scan_end_time_, maxSolveTime);
+    analytics_.kf_iterations = ekfom_iter_cnt_;
   }
   const double t3 = omp_get_wtime();
 

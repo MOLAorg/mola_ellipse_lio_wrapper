@@ -124,6 +124,14 @@ TEST(EllipseLioCore, StationaryRunConvergesAndBuildsMap)
     EXPECT_LT(last_output.pose_imu.translation().norm(), 2.0);
     // Gravity magnitude should converge close to G_m_s2.
     EXPECT_NEAR(last_output.gravity.norm(), G_m_s2, 2.0);
+
+    // The rolling registration scores are means of values clamped to [1e-4, 1].
+    const auto & a = last_output.analytics;
+    for (const double score : {a.obs_score, a.vert_score, a.cov_score, a.wt_score, a.bin_score}) {
+      EXPECT_GT(score, 0.0);
+      EXPECT_LE(score, 1.0 + 1e-9);
+    }
+    EXPECT_GE(a.kf_iterations, 1);
   }
 
   auto map = core.currentMap();

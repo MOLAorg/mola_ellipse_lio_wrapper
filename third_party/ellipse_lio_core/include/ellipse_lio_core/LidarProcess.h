@@ -5,8 +5,8 @@
 // Rowan Border and Margarita Chli. Ported: the ROS `PointCloud2` subscription
 // and the vendor-specific point-decoding templates (`PointCloudHandler<T>`,
 // `ConvertPoint<T>`, the per-vendor `SetPoint()` overloads for Livox,
-// Velodyne, Ouster and Gazebo) were removed -- this port receives points
-// already decoded into `LidarPointVector` (see Types.hpp and
+// Velodyne, Ouster and the two simulators) were removed -- this port receives
+// points already decoded into `LidarPointVector` (see Types.hpp and
 // mola_ellipse_lio_wrapper's MRPT adapters), so there is no raw
 // `PointCloud2` to parse. The Hesai decoding path is preserved in spirit:
 // upstream's `SetPoint(HesaiPoint, ...)` used the point's own absolute
@@ -29,8 +29,9 @@ namespace ellipse_lio_core
 {
 /// LiDAR sensor parameters (mirrors upstream's `LidarParams`, minus the ROS
 /// topic name). `type` is kept for config-schema parity with upstream
-/// (LidType: 1=Livox, 2=Velodyne, 3=Ouster, 4=Hesai, 5=Gazebo) even though
-/// this port no longer branches on it -- see the file comment above.
+/// (LidType: 1=Livox, 2=Velodyne, 3=Ouster, 4=Hesai, 5=Gazebo, 6=XYZ-only
+/// simulator points) even though this port no longer branches on it -- see
+/// the file comment above.
 struct LidarParams
 {
   int type = 4;
@@ -72,7 +73,6 @@ public:
   float scan_res_ = 0;
   float min_scan_res_ = 0;
   float max_search_rad_ = 0;
-  float max_octree_res_ = 10;
 
   std::atomic<int> lidar_counter_{0};
   /// Detected backward time jump between consecutive scans (bag replay

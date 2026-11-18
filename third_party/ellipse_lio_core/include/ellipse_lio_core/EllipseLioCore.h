@@ -60,8 +60,8 @@ private:
   bool SyncPackages();
   void SyncRawCloudWithImu();
 
-  void ComputeTensorVote(int i, int j, M3F * A_j, bool first_pass);
-  void ComputeTensorEigen(int i, M3F * tensor, bool first_pass);
+  void ComputeTensorVote(int i, int j, M3F & A_j, bool first_pass);
+  void ComputeTensorEigen(int i, M3F & tensor, bool first_pass);
   void TensorVotePass1(
     int old_map_size, std::vector<int> & added_idxs, std::vector<int> & updated_idxs);
   void TensorVotePass2(std::vector<int> & added_idxs, std::vector<int> & updated_idxs);
@@ -92,19 +92,19 @@ private:
   int num_processors_ = 1;
   std::clock_t last_cpu_ = 0, last_sys_cpu_ = 0, last_user_cpu_ = 0;
 
-  int start_bin_cnt_ = 0;
-  int ekfom_vert_cnt_ = 0;
-  int ekfom_obs_cnt_ = 0;
   int ekfom_iter_cnt_ = 0;
+  int ekfom_mean_cnt_ = -1;
+  int start_mean_cnt_ = -1;
 
   Eigen::ArrayXi n_means_;
   Eigen::ArrayXXi n_cnts_;
   Eigen::ArrayXXi n_bins_;
 
+  /// Rolling windows of the per-update scores (columns: observability,
+  /// vertical motion, covariance, weight spread, start bin).
+  Eigen::ArrayXXd mean_score_wt_;
+
   Eigen::ArrayXd ekfom_data_w_;
-  Eigen::ArrayXd ekfom_data_sb_;
-  Eigen::ArrayXd ekfom_data_om_;
-  Eigen::ArrayXd ekfom_data_oe_;
   Eigen::ArrayXXd ekfom_data_ot_;
   Eigen::ArrayXXd ekfom_data_or_;
   Eigen::VectorXd ekfom_data_h_;
@@ -125,6 +125,8 @@ private:
   std::vector<V3F> eigenvalues_;
   std::vector<V3F> salivalues_;
 
+  Eigen::ArrayXXd cov_scale_bins_;
+
   Eigen::ArrayXi raw_cloud_bins_;
   Eigen::ArrayXi scan_cloud_bins_;
   Eigen::ArrayXi buffer_cloud_bins_;
@@ -144,9 +146,9 @@ private:
   EllipseLioPointCloudPtr map_cloud_{new EllipseLioPointCloud()};
   EllipseLioPointCloudPtr raw_cloud_{new EllipseLioPointCloud()};
   EllipseLioPointCloudPtr scan_cloud_{new EllipseLioPointCloud()};
-  EllipseLioPointCloudPtr scan_cloud_grav_{new EllipseLioPointCloud()};
   EllipseLioPointCloudPtr filter_cloud_{new EllipseLioPointCloud()};
   EllipseLioPointCloudPtr buffer_cloud_{new EllipseLioPointCloud()};
+  std::vector<EllipseLioPointCloud> grav_bin_pcs_;
 
   iOctree::Octree ioctree_;
 
